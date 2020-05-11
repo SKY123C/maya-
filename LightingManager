@@ -1,0 +1,223 @@
+# coding:utf-8
+import pymel.core as pm
+from functools import partial
+from PySide2 import QtWidgets, QtCore
+from maya import OpenMayaUI as mui
+import shiboken2
+
+
+def get_window():
+    win = mui.MQtUtil().mainWindow()
+
+    ptr = shiboken2.wrapInstance(long(win), QtWidgets.QMainWindow)
+    return ptr
+
+
+def get_dock(name = "LightingmanagerDock"):
+    delete_dock(name)
+    ctrl = pm.workspaceControl(name, dockToMainWindow=("right", 1), label="Light Manager")
+
+    ptr = mui.MQtUtil().findControl(ctrl)
+    widget = shiboken2.wrapInstance(long(ptr), QtWidgets.QWidget)
+
+    return widget
+
+
+def delete_dock(name = "LightingmanagerDock"):
+    if pm.workspaceControl(name, q=True, exists=True):
+        pm.deleteUI(name)
+
+
+class Lightingmanager(QtWidgets.QWidget):
+
+    lightTypes = {
+        "Point Light": pm.pointLight,
+        "Spot Light": pm.spotLight,
+        "Directional Light": pm.directionalLight,
+        "Area Light": partial(pm.shadingNode, "areaLight", asLight=True),
+        "Volume Light": partial(pm.shadingNode, "volumeLight", asLight=True)
+
+    }
+
+    def __init__(self, dock=True):
+
+        if dock:
+            parent = get_dock()
+        else:
+            delete_dock()
+
+            try:
+                pm.deleteUI("LightingmanagerDock")
+
+            except:
+                print("NO")
+
+                parent = QtWidgets.QDialog(parent=get_window())
+
+                parent.setWindowTitle("Lighting Manager")
+                layout = QtWidgets.QVBoxLayout(parent)
+
+        super(Lightingmanager, self).__init__(parent=parent)
+        #self.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
+
+        self.buildui()
+        self.populate()
+
+        self.parent().layout().addWidget(self)
+
+    def buildui(self):
+
+        layout = QtWidgets.QGridLayout(self)
+
+        self.lightTypeCB = QtWidgets.QComboBox()
+
+        for i in sorted(self.lightTypes):
+
+            self.lightTypeCB.addItem(i)
+
+        layout.addWidget(self.lightTypeCB, 0, 0)
+
+        create_btn = QtWidgets.QPushButton("Create")
+        create_btn.clicked.connect(self.create_light)
+
+        layout.addWidget(create_btn, 0, 1)
+
+        scrollwidget = QtWidgets.QWidget()
+        scrollwidget.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum,QtWidgets.QSizePolicy.Maximum))
+        self.scrolllayout = QtWidgets.QVBoxLayout(scrollwidget)
+        scrollarea = QtWidgets.QScrollArea()
+        scrollarea.setWidgetResizable(True)
+        scrollarea.setWidget(scrollwidget)
+
+        layout.addWidget(scrollarea, 1 , 0, 1, 2)
+
+        refresh = QtWidgets.QPushButton("Refresh")
+        refresh.clicked.connect(self.populate)
+
+        layout.addWidget(refresh, 2, 1)
+
+    def populate(self):
+        # takeAt:布局的addwidget生成一个item加入到layout的item链表中,返回的是链表的位置
+        while self.scrolllayout.count():
+            widget = self.scrolllayout.takeAt(0).widget()
+
+            if widget:
+                widget.deleteLater()
+
+        for i in pm.ls(type=["areaLight", "spotLight", "pointLight", "directionalLight", "volumeLight"]):
+            self.addwidget(i)
+
+
+
+    def create_light(self):
+
+        lightType = self.lightTypeCB.currentText()
+        light = self.lightTypes[lightType]()
+
+        self.addwidget(light)
+
+
+    def addwidget(self, light):
+
+        widget = LightWidget(light)
+
+        self.scrolllayout.addWidget(widget)
+
+        widget.onsolo.connect(self.onsolo)
+
+    def onsolo(self, value):
+        list_widgets = self.findChildren(LightWidget)
+
+        for widget in list_widgets:
+
+            if widget != self.sender():
+                widget.disablelight(value)
+
+
+class LightWidget(QtWidgets.QWidget):
+
+    onsolo = QtCore.Signal(bool)
+
+    def __init__(self, light):
+        super(LightWidget, self).__init__()
+
+        if isinstance(light, basestring):
+            light = pm.PyNode(light)
+
+        self.light = light
+        print(self.light.color.get())
+
+        self.buildui()
+
+    def buildui(self):
+
+        layout = QtWidgets.QGridLayout(self)
+
+        self.name = QtWidgets.QCheckBox(str(self.light.getTransform()))
+
+        self.name.setChecked(self.light.visibility.get())
+
+        self.name.toggled.connect(lambda val: self.light.getTransform().visibility.set(val))
+
+
+        layout.addWidget(self.name,0,0)
+
+        solobtn = QtWidgets.QPushButton("Solo")
+
+        solobtn.setCheckable(True)
+        solobtn.toggled.connect(lambda val: self.onsolo.emit(val))
+
+        layout.addWidget(solobtn, 0, 1)
+
+        deletebtn = QtWidgets.QPushButton("X")
+        deletebtn.clicked.connect(self.deletelight)
+        deletebtn.setMaximumWidth(10)
+
+        layout.addWidget(deletebtn, 0, 2)
+
+        intensity = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        intensity.setMinimum(1)
+        intensity.setMaximum(100)
+        intensity.setValue(self.light.intensity.get())
+        intensity.valueChanged.connect(lambda val: self.light.intensity.set(val))
+
+        layout.addWidget(intensity, 1, 0, 1, 2)
+
+        self.color_btn = QtWidgets.QPushButton()
+        self.color_btn.setMaximumWidth(20)
+        self.color_btn.setMaximumHeight(20)
+        self.set_button_color()
+        self.color_btn.clicked.connect(self.set_color)
+
+        layout.addWidget(self.color_btn, 1, 2)
+
+    def set_button_color(self, color = None):
+
+        if not color:
+            color = self.light.color.get()
+
+        assert len(color) == 3, "****"
+        r, g, b = [c*255 for c in color]
+
+        self.color_btn.setStyleSheet("background-color: rgba({},{},{},1.0)".format(r, g, b))
+
+    def set_color(self):
+        color = pm.colorEditor(rgbValue=self.light.color.get())
+        # re.findall(r"\S+", color)
+        r, g, b, a = [float(c) for c in color.split()]
+
+        color = (r, g, b)
+        self.light.color.set(color)
+        self.set_button_color(color)
+
+    def disablelight(self, value):
+        self.name.setChecked(not value)
+
+    def deletelight(self):
+        self.setParent(None)
+        self.setVisible(False)
+        pm.delete(self.light.getTransform())
+
+
+ui = Lightingmanager()
+ui.show()
