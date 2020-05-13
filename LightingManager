@@ -1,9 +1,13 @@
 # coding:utf-8
 import pymel.core as pm
 from functools import partial
+
+import time
 from PySide2 import QtWidgets, QtCore
 from maya import OpenMayaUI as mui
 import shiboken2
+import json
+import os
 
 
 def get_window():
@@ -75,12 +79,12 @@ class Lightingmanager(QtWidgets.QWidget):
 
             self.lightTypeCB.addItem(i)
 
-        layout.addWidget(self.lightTypeCB, 0, 0)
+        layout.addWidget(self.lightTypeCB, 0, 0, 1, 2)
 
         create_btn = QtWidgets.QPushButton("Create")
         create_btn.clicked.connect(self.create_light)
 
-        layout.addWidget(create_btn, 0, 1)
+        layout.addWidget(create_btn, 0, 2)
 
         scrollwidget = QtWidgets.QWidget()
         scrollwidget.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum,QtWidgets.QSizePolicy.Maximum))
@@ -89,12 +93,78 @@ class Lightingmanager(QtWidgets.QWidget):
         scrollarea.setWidgetResizable(True)
         scrollarea.setWidget(scrollwidget)
 
-        layout.addWidget(scrollarea, 1 , 0, 1, 2)
+        layout.addWidget(scrollarea, 1 , 0, 1, 3)
+
+        save_btn = QtWidgets.QPushButton("Save")
+        save_btn.clicked.connect(self.save_lights)
+        layout.addWidget(save_btn, 2, 0)
+
+        import_btn = QtWidgets.QPushButton("Import")
+        import_btn.clicked.connect(self.import_lights)
+        layout.addWidget(import_btn, 2, 1)
 
         refresh = QtWidgets.QPushButton("Refresh")
         refresh.clicked.connect(self.populate)
 
-        layout.addWidget(refresh, 2, 1)
+        layout.addWidget(refresh, 2, 2)
+
+    def save_lights(self):
+        properties = {}
+
+        for lightwidget in self.findChildren(LightWidget):
+
+            light = lightwidget.light
+
+            properties[str(light.getTransform())] = {
+                'translate': list(light.getTransform().translate.get()),
+                'rotation': list(light.getTransform().rotate.get()),
+                'lightType': pm.nodeType(light),
+                'intensity': light.intensity.get(),
+                'color': light.color.get()
+            }
+            print pm.nodeType(light)
+        directory = self.get_directory()
+        lightfile = os.path.join(directory, "lightFile_%s.json" % time.strftime("%m%d"))
+
+        try:
+            with open(lightfile, "w") as f:
+                json.dump(properties, f, indent=4, sort_keys=False)
+        except:
+            print u"保存失败"
+        else:
+            print u"保存成功"
+
+    def get_directory(self):
+        directory = os.path.join(pm.internalVar(userAppDir=True), "lightingmanager")
+        if not os.path.exists(directory):
+            os.mkdir(directory)
+        return directory
+
+    def import_lights(self):
+        directory = self.get_directory()
+
+        filename = QtWidgets.QFileDialog.getOpenFileName(self, "LightingM", directory)
+
+        with open(filename[0], "r") as f:
+            properties = json.load(f)
+
+        for light, info in properties.items():
+            lightType = info.get("lightType")
+            print lightType
+
+            for lt in self.lightTypes:
+
+                if '{}Light'.format(lt.split()[0].lower()) == lightType:
+                    break
+            else:
+                print "Cant find {}".format(lightType)
+                continue
+            light = self.create_light(lighttype=lt)
+            light.intensity.set(info.get("intensity"))
+            light.color.set(info.get("color"))
+            light.getTransform().translate.set(info.get("translate"))
+            light.getTransform().rotate.set(info.get("rotation"))
+        self.populate()
 
     def populate(self):
         # takeAt:布局的addwidget生成一个item加入到layout的item链表中,返回的是链表的位置
@@ -107,15 +177,16 @@ class Lightingmanager(QtWidgets.QWidget):
         for i in pm.ls(type=["areaLight", "spotLight", "pointLight", "directionalLight", "volumeLight"]):
             self.addwidget(i)
 
+    def create_light(self, lighttype=None, add=True):
+        if not lighttype:
 
+            lighttype = self.lightTypeCB.currentText()
 
-    def create_light(self):
+        light = self.lightTypes[lighttype]()
+        if add:
 
-        lightType = self.lightTypeCB.currentText()
-        light = self.lightTypes[lightType]()
-
-        self.addwidget(light)
-
+            self.addwidget(light)
+        return light
 
     def addwidget(self, light):
 
@@ -144,8 +215,10 @@ class LightWidget(QtWidgets.QWidget):
         if isinstance(light, basestring):
             light = pm.PyNode(light)
 
+        if isinstance(light, pm.nodetypes.Transform):
+            light = light.getShape()
+
         self.light = light
-        print(self.light.color.get())
 
         self.buildui()
 
